@@ -1,12 +1,13 @@
-import os
-import openai
-import json
-import re
 import ast
 import copy
 import inspect
+import json
+import re
 from typing import get_type_hints
+
 from openai import OpenAI
+
+loc_client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
 
 ### Helper Functions ###
 
@@ -271,7 +272,7 @@ def check_key(field: str, output_format, new_output_format, delimiter: str, deli
     # otherwise just return the value
     else:
         return field
-    
+
 def remove_unicode_escape(my_datatype):
     ''' Removes the unicode escape character from the ending string in my_datatype (can be nested) '''
     if isinstance(my_datatype, dict):
@@ -292,7 +293,7 @@ def remove_unicode_escape(my_datatype):
         return my_datatype
     else:
         return my_datatype
-    
+
 def wrap_with_angle_brackets(d: dict, delimiter: str, delimiter_num: int) -> dict:
     ''' Changes d to output_d by wrapping delimiters over the keys, and putting angle brackets on the values 
     Also changes all mention of `list` after type: to `array` for better processing '''
@@ -315,8 +316,8 @@ def wrap_with_angle_brackets(d: dict, delimiter: str, delimiter_num: int) -> dic
         return f'<{d}>'
     else:
         return d
-    
-def chat(system_prompt: str, user_prompt: str, model: str = 'gpt-3.5-turbo', temperature: float = 0, verbose: bool = False, host: str = 'openai', llm = None, **kwargs):
+
+def chat(system_prompt: str, user_prompt: str, model: str = 'gpt-3.5-turbo', temperature: float = 0, verbose: bool = False, host: str = 'openai', llm = None, max_tokens: int = 0, local_client: bool = False, **kwargs):
     '''Performs a chat with the host's LLM model with system prompt, user prompt, model, verbose and kwargs
     Returns the output string res
     - system_prompt: String. Write in whatever you want the LLM to become. e.g. "You are a \<purpose in life\>"
@@ -328,6 +329,7 @@ def chat(system_prompt: str, user_prompt: str, model: str = 'gpt-3.5-turbo', tem
         - Inputs:
             - system_prompt: String. Write in whatever you want the LLM to become. e.g. "You are a \<purpose in life\>"
             - user_prompt: String. The user input. Later, when we use it as a function, this is the function input
+            
         - Output:
             - res: String. The response of the LLM call
     - **kwargs: Dict. Additional arguments for LLM chat
@@ -348,7 +350,10 @@ def chat(system_prompt: str, user_prompt: str, model: str = 'gpt-3.5-turbo', tem
             except Exception as e:
                 model = 'gpt-3.5-turbo-1106'
                 
-        client = OpenAI()
+        if local_client:
+            client = loc_client
+        else:
+            client = OpenAI()
         response = client.chat.completions.create(
             model=model,
             temperature = temperature,
@@ -356,6 +361,7 @@ def chat(system_prompt: str, user_prompt: str, model: str = 'gpt-3.5-turbo', tem
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
+            max_tokens=max_tokens,
             **kwargs
         )
         res = response.choices[0].message.content
@@ -400,7 +406,7 @@ async def chat_async(system_prompt: str, user_prompt: str, model: str = 'gpt-3.5
             except Exception as e:
                 model = 'gpt-3.5-turbo-1106'
                 
-        client = OpenAI()
+        client = loc_client
         response = client.chat.completions.create(
             model=model,
             temperature = temperature,
@@ -471,8 +477,8 @@ def get_fn_description(my_function) -> (str, list):
     return my_fn_description, param_list
 
 ### Main Functions ###
-                
-def strict_json(system_prompt: str, user_prompt: str, output_format: dict, return_as_json = False, custom_checks: dict = dict(), check_data = None, delimiter: str = '###', num_tries: int = 3, openai_json_mode: bool = False, **kwargs):
+
+def strict_json(system_prompt: str, user_prompt: str, output_format: dict, return_as_json = False, custom_checks: dict = dict(), check_data = None, delimiter: str = '###', num_tries: int = 3, openai_json_mode: bool = False, max_tokens: int = 2000, local_client: bool = False, **kwargs):
     ''' Ensures that OpenAI will always adhere to the desired output JSON format defined in output_format. 
     Uses rule-based iterative feedback to ask GPT to self-correct.
     Keeps trying up to num_tries it it does not. Returns empty JSON if unable to after num_tries iterations.
@@ -489,6 +495,8 @@ def strict_json(system_prompt: str, user_prompt: str, output_format: dict, retur
     - delimiter: String (Default: '###'). This is the delimiter to surround the keys. With delimiter ###, key becomes ###key###
     - num_tries: Integer (default: 3). The number of tries to iteratively prompt GPT to generate correct json format
     - openai_json_mode: Boolean (default: False). Whether or not to use OpenAI JSON Mode
+    - max_tokens: Integer. Default: 2000. The maximum number of tokens to use for the chat response
+    - local_client: Bool. Default: False. Whether to use the local OpenAI client or the API
     - **kwargs: Dict. Additional arguments for LLM chat
     
     Output:
@@ -517,6 +525,7 @@ def strict_json(system_prompt: str, user_prompt: str, output_format: dict, retur
             try:
                 loaded_json = json.loads(res)
             except Exception as e:
+                print('An exception occured: ', repr(e))
                 loaded_json = {}
             return loaded_json
         
@@ -536,7 +545,7 @@ Update text enclosed in <>. Output only a valid json string beginning with {{ an
             my_user_prompt = str(user_prompt) 
 
             # Use OpenAI to get a response
-            res = chat(my_system_prompt, my_user_prompt, **kwargs)
+            res = chat(my_system_prompt, my_user_prompt, max_tokens=max_tokens, **kwargs)
             
             # extract only the chunk including the opening and closing braces
             startindex = res.find('{')
@@ -545,12 +554,14 @@ Update text enclosed in <>. Output only a valid json string beginning with {{ an
 
             # try-catch block to ensure output format is adhered to
             try:
+                res = res.replace('/n', '')
                 # check that res is a json string
                 if res[0] != '{' or res[-1] != '}':
                     raise Exception('Ensure output must be a json string beginning with { and ending with }')
                 
                 # do checks for keys and output format, remove escape characters so code can be run
                 end_dict = check_key(res, output_format, new_output_format, delimiter, delimiter_num = 1, **kwargs)
+
                 
                 # run user defined custom checks now
                 for key in end_dict:
@@ -569,8 +580,9 @@ Update text enclosed in <>. Output only a valid json string beginning with {{ an
                     return end_dict
 
             except Exception as e:
-                error_msg = f"\n\nPrevious json: {res}\njson error: {str(e)}\nFix the error."                
-                print("An exception occurred:", str(e))
+                error_msg = f"\n\nPrevious json: {res}\njson error: {repr(e)}\nFix the error."    
+                print(error_msg)            
+                print("An exception occurred:", repr(e))
                 print("Current invalid json format:", res)
 
         return {}
@@ -673,8 +685,8 @@ Update text enclosed in <>. Output only a valid json string beginning with {{ an
                     return end_dict
 
             except Exception as e:
-                error_msg = f"\n\nPrevious json: {res}\njson error: {str(e)}\nFix the error."                
-                print("An exception occurred:", str(e))
+                error_msg = f"\n\nPrevious json: {res}\njson error: {repr(e)}\nFix the error."                
+                print("An exception occurred:", repr(e))
                 print("Current invalid json format:", res)
 
         return {}
@@ -941,7 +953,7 @@ Can also be done automatically by providing docstring with input variable names 
             res = {'Status': 'Completed'}
 
         return res
-    
+
 ### Legacy Support ###
 # alternative names for strict_json
 strict_text = strict_json
