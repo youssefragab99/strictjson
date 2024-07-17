@@ -8,6 +8,8 @@ from typing import get_type_hints
 from openai import OpenAI
 
 loc_client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
+LOCAL_CLIENT_URL = "http://localhost:1234/v1"
+LOCAL_CLIENT_API_KEY = "lm-studio"
 
 ### Helper Functions ###
 
@@ -332,6 +334,7 @@ def chat(system_prompt: str, user_prompt: str, model: str = 'gpt-3.5-turbo', tem
             
         - Output:
             - res: String. The response of the LLM call
+    - local_client: Boolean. Use a local client de
     - **kwargs: Dict. Additional arguments for LLM chat
     
     TODO: Incorporate other open-sourced LLMs in the future'''
@@ -339,7 +342,7 @@ def chat(system_prompt: str, user_prompt: str, model: str = 'gpt-3.5-turbo', tem
         ''' If you specified your own LLM, then we just feed in the system and user prompt 
         LLM function should take in system prompt (str) and user prompt (str), and output a response (str) '''
         res = llm(system_prompt = system_prompt, user_prompt = user_prompt)
-    
+
     ## This part here is for llms that are OpenAI based
     elif host == 'openai':
         # additional checks for openai json mode
@@ -349,9 +352,9 @@ def chat(system_prompt: str, user_prompt: str, model: str = 'gpt-3.5-turbo', tem
                 assert(model in ['gpt-4-1106-preview', 'gpt-3.5-turbo-1106'])
             except Exception as e:
                 model = 'gpt-3.5-turbo-1106'
-                
+
         if local_client:
-            client = loc_client
+            client = OpenAI(base_url=LOCAL_CLIENT_URL, api_key=LOCAL_CLIENT_API_KEY)
         else:
             client = OpenAI()
         response = client.chat.completions.create(
@@ -370,7 +373,7 @@ def chat(system_prompt: str, user_prompt: str, model: str = 'gpt-3.5-turbo', tem
         print('System prompt:', system_prompt)
         print('\nUser prompt:', user_prompt)
         print('\nGPT response:', res)
-            
+
     return res
 
 
@@ -496,7 +499,7 @@ def strict_json(system_prompt: str, user_prompt: str, output_format: dict, retur
     - num_tries: Integer (default: 3). The number of tries to iteratively prompt GPT to generate correct json format
     - openai_json_mode: Boolean (default: False). Whether or not to use OpenAI JSON Mode
     - max_tokens: Integer. Default: 2000. The maximum number of tokens to use for the chat response
-    - local_client: Bool. Default: False. Whether to use the local OpenAI client or the API
+    - local_client: Bool. Default: False. Whether to use the local OpenAI client or the API. The variable is passed to the chat function
     - **kwargs: Dict. Additional arguments for LLM chat
     
     Output:
@@ -517,7 +520,7 @@ def strict_json(system_prompt: str, user_prompt: str, output_format: dict, retur
         my_system_prompt = str(system_prompt) + output_format_prompt
         my_user_prompt = str(user_prompt) 
             
-        res = chat(my_system_prompt, my_user_prompt, response_format = {"type": "json_object"}, **kwargs)
+        res = chat(my_system_prompt, my_user_prompt, response_format = {"type": "json_object"}, local_client = local_client, **kwargs)
         
         if return_as_json:
             return res
@@ -586,8 +589,8 @@ Update text enclosed in <>. Output only a valid json string beginning with {{ an
                 print("Current invalid json format:", res)
 
         return {}
-    
-    
+
+
 async def strict_json_async(system_prompt: str, user_prompt: str, output_format: dict, return_as_json = False, custom_checks: dict = dict(), check_data = None, delimiter: str = '###', num_tries: int = 3, openai_json_mode: bool = False, **kwargs):
     ''' Ensures that OpenAI will always adhere to the desired output JSON format defined in output_format. 
     Uses rule-based iterative feedback to ask GPT to self-correct.
